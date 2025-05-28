@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document</title>
+    <style>
+      #imageContainer {
+        margin-top: 20px;
+      }
+      #previewImage {
+        max-width: 100%;
+        max-height: 500px;
+      }
+    </style>
+  </head>
+  <body>
+    <input type="file" id="imageInput" accept="image/*" />
+    <div id="imageContainer">
+      <img id="previewImage" src="" alt="Preview" style="display: none" />
+    </div>
+    <script>
+      window.onload = function () {
+        const imageInput = document.getElementById("imageInput");
+        const previewImage = document.getElementById("previewImage");
+
+        imageInput.addEventListener("change", (event) => {
+          const file = event.target.files[0];
+          if (file) {
+            const reader = new FileReader();
+
+            reader.onload = (e) => {
+              previewImage.src = e.target.result;
+              previewImage.style.display = "block";
+            };
+
+            reader.readAsDataURL(file);
+          }
+        });
+      };
+    </script>
+  </body>
+</html>
