@@ -32,7 +32,7 @@
   <body>
     <div class="input-group">
       <label for="heightInput">Height (cm): </label>
-      <input type="number" id="heightInput" min="100" max="250" value="170" />
+      <input type="number" id="heightInput" min="100" max="250" value="160" />
     </div>
     <input type="file" id="imageInput" accept="image/*" />
     <div id="imageContainer">
@@ -48,12 +48,15 @@
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <!-- Load Pose Detection -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection"></script>
+    <!-- Load Gemini API -->
+    <script src="https://cdn.jsdelivr.net/npm/@google/generative-ai@0.1.3/dist/web/index.min.js"></script>
 
     <script>
       let detector;
       let canvas;
       let ctx;
       let currentHeight = 160; // default height in cm
+      let geminiModel;
 
       async function initPoseDetection() {
         const model = poseDetection.SupportedModels.MoveNet;
@@ -61,6 +64,20 @@
           modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING,
         };
         detector = await poseDetection.createDetector(model, detectorConfig);
+      }
+
+      async function initGemini() {
+        try {
+          const genAI = new window.google.generativeAI.GoogleGenerativeAI(
+            "GEMINI_API_KEY"
+          );
+          geminiModel = genAI.getGenerativeModel({
+            model: "gemini-pro-vision",
+          });
+          console.log("Gemini initialized successfully");
+        } catch (error) {
+          console.error("Error initializing Gemini:", error);
+        }
       }
 
       async function detectPose(image) {
@@ -214,9 +231,77 @@
           measurements.lowerBody = Math.round(
             (hipToKneeDistance + kneeToAnkleDistance) * pixelToCmRatio
           );
+          measurements.hipToKnee = Math.round(
+            hipToKneeDistance * pixelToCmRatio
+          );
+          measurements.kneeToAnkle = Math.round(
+            kneeToAnkleDistance * pixelToCmRatio
+          );
         }
 
         return measurements;
+      }
+
+      async function analyzeWithGemini(measurements, imageData) {
+        try {
+          // Convert base64 image to blob
+          const response = await fetch(imageData);
+          const blob = await response.blob();
+
+          // Calculate ratio
+          const gcd = (a, b) => (b ? gcd(b, a % b) : a);
+          const divisor = gcd(measurements.upperBody, measurements.lowerBody);
+          const n = Math.round(measurements.upperBody / divisor);
+          const m = Math.round(measurements.lowerBody / divisor);
+
+          // Calculate percentages
+          const totalHeight =
+            measurements.head + measurements.upperBody + measurements.lowerBody;
+          const upperBodyRatio = (
+            (measurements.upperBody / totalHeight) *
+            100
+          ).toFixed(1);
+          const lowerBodyRatio = (
+            (measurements.lowerBody / totalHeight) *
+            100
+          ).toFixed(1);
+
+          // Create image part for Gemini
+          const imagePart = {
+            inlineData: {
+              data: imageData.split(",")[1],
+              mimeType: "image/jpeg",
+            },
+          };
+
+          // Create text part with measurements
+          const textPart = `
+            Analyze this person's body type based on the following measurements:
+            - Total Height: ${totalHeight} cm
+            - Head Height: ${measurements.head} cm
+            - Upper Body: ${measurements.upperBody} cm
+            - Lower Body: ${measurements.lowerBody} cm
+            - Upper:Lower Ratio: ${n}:${m}
+            - Upper Body Ratio: ${upperBodyRatio}%
+            - Lower Body Ratio: ${lowerBodyRatio}%
+
+            Please provide:
+            1. Body type classification
+            2. Brief description of the body proportions
+            3. Any notable characteristics
+          `;
+
+          // Generate content with Gemini
+          const result = await geminiModel.generateContent([
+            textPart,
+            imagePart,
+          ]);
+          const res = await result.response;
+          return res.text();
+        } catch (error) {
+          console.error("Error analyzing with Gemini:", error);
+          return "Error analyzing body type. Please try again.";
+        }
       }
 
       function displayMeasurements(measurements) {
@@ -241,14 +326,41 @@
         const m = Math.round(lowerBodyLength / divisor);
 
         resultsDiv.innerHTML = `
-          <p>Head Height: ${measurements.head || "N/A"} cm</p>
-          <p>Upper Body: ${measurements.upperBody || "N/A"} cm</p>
-          <p>Lower Body: ${measurements.lowerBody || "N/A"} cm</p>
-          <p>Total Height: ${totalHeight || "N/A"} cm</p>
-          <p>Upper Body Ratio: ${upperBodyRatio}%</p>
-          <p>Lower Body Ratio: ${lowerBodyRatio}%</p>
-          <p>Upper:Lower Ratio: ${n}:${m}</p>
+          <div style="display: flex; justify-content: space-between;">
+            <div style="flex: 1; padding-right: 20px;">
+              <h4>General Proportions</h4>
+              <p>Total Height: ${totalHeight || "N/A"} cm</p>
+              <p>Upper:Lower Ratio: ${n}:${m}</p>
+              <p>Upper Body Ratio: ${upperBodyRatio}%</p>
+              <p>Lower Body Ratio: ${lowerBodyRatio}%</p>
+            </div>
+            <div style="flex: 1; padding-left: 20px; border-left: 1px solid #ccc;">
+              <h4>Detailed Measurements</h4>
+              <p>Head Height: ${measurements.head || "N/A"} cm</p>
+              <p>Upper Body: ${measurements.upperBody || "N/A"} cm</p>
+              <p>Lower Body: ${measurements.lowerBody || "N/A"} cm</p>
+              <p>Hip to Knee: ${measurements.hipToKnee || "N/A"} cm</p>
+              <p>Knee to Ankle: ${measurements.kneeToAnkle || "N/A"} cm</p>
+            </div>
+          </div>
+          <div id="bodyTypeAnalysis" style="margin-top: 20px; padding: 15px; background-color: #f8f9fa; border-radius: 5px;">
+            <h4>Body Type Analysis</h4>
+            <p>Analyzing body type with Gemini AI...</p>
+          </div>
         `;
+
+        // Get the image data from canvas
+        const imageData = canvas.toDataURL("image/jpeg");
+
+        // Send data to Gemini for analysis
+        analyzeWithGemini(measurements, imageData).then((analysis) => {
+          const analysisDiv = document.getElementById("bodyTypeAnalysis");
+          analysisDiv.innerHTML = `
+            <h4>Body Type Analysis</h4>
+            <div style="white-space: pre-line;">${analysis}</div>
+          `;
+        });
+
         document.getElementById("measurements").style.display = "block";
       }
 
@@ -346,6 +458,7 @@
 
       window.onload = async function () {
         await initPoseDetection();
+        await initGemini();
 
         const imageInput = document.getElementById("imageInput");
         const previewImage = document.getElementById("previewImage");
